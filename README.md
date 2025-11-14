@@ -130,6 +130,3 @@ Pull requests, issues, and improvements are welcome!
 
 ⭐ Support the Project
 If you like this project, give it a star ⭐ on GitHub!
-
-yaml
-Copy code
