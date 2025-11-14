@@ -1,0 +1,18 @@
+# Ignore virtual environments
+venv/
+env/
+
+# Ignore build folders
+build/
+dist/
+__pycache__/
+*.spec
+
+# Ignore downloads folder (videos)
+downloads/
+
+# Ignore log files
+*.log
+
+# Ignore exe files
+*.exe
