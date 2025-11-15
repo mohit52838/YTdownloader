@@ -15,6 +15,8 @@ import shutil
 import requests
 import tempfile
 import subprocess
+import webbrowser
+
 try:
     import customtkinter as ctk
     from tkinter import filedialog, messagebox
@@ -252,580 +254,554 @@ if GUI_AVAILABLE:
     class App(ctk.CTk):
         def __init__(self):
             super().__init__()
-            self.title('YTdownloader — Modern')
-            # start window a bit larger; user can maximize
-            self.geometry('1100x720')
-            ctk.set_appearance_mode('System')
-            # We will not change global theme, but use accent color for primary buttons
-            self.ACCENT = "#E53935"
+            self.title("YTdownloader – Modern")
+            self.geometry("1200x800")
+            self.resizable(True, True)
+            ctk.set_appearance_mode("System")
+            self.ACCENT = "#E53935"      # Primary accent
+            self.ACCENT_HOVER = "#D32F2F" # Hover color 
 
-            # Prevent multiple concurrent downloads
-            self.downloading = False
 
-            # Make the window responsive
+            # Responsive layout
             self.grid_rowconfigure(0, weight=1)
             self.grid_columnconfigure(0, weight=1)
 
-            self.output_dir = os.path.join(os.getcwd(), 'downloads')
+            self.output_dir = os.path.join(os.getcwd(), "downloads")
             ensure_dir(self.output_dir)
 
-            # Create main container frame
-            self.container = ctk.CTkFrame(self, corner_radius=12)
-            self.container.grid(row=0, column=0, sticky="nsew", padx=14, pady=14)
+            # Main container
+            self.container = ctk.CTkFrame(self, corner_radius=20)
+            self.container.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
             self.container.grid_rowconfigure(1, weight=1)
             self.container.grid_columnconfigure(0, weight=1)
 
-            # Header
+            # Build UI
             self._build_header()
+            self._build_body()
+            self._build_footer()
 
-            # Body (tabs + right-side info)
-            body = ctk.CTkFrame(self.container, corner_radius=8)
-            body.grid(row=1, column=0, sticky="nsew", padx=10, pady=(12,10))
+            # Start update check
+            threading.Thread(target=self._maybe_check_update_gui, daemon=True).start()
+
+            # Startup animation
+            self._animate_startup()
+
+        # ------------------------------------------------------------------
+        # HEADER
+        # ------------------------------------------------------------------
+        def _build_header(self):
+            header = ctk.CTkFrame(self.container, corner_radius=16, height=80)
+            header.grid(row=0, column=0, sticky="ew", padx=15, pady=(15, 0))
+            header.grid_columnconfigure(1, weight=1)
+
+            # Logo + Version
+            left = ctk.CTkFrame(header, fg_color="transparent")
+            left.grid(row=0, column=0, sticky="w", padx=20)
+            self.logo = ctk.CTkLabel(left, text="YTdownloader",
+                                     font=ctk.CTkFont(size=28, weight="bold"))
+            self.logo.grid(row=0, column=0, padx=(0, 10))
+            ctk.CTkLabel(left, text=f"v{APP_VERSION}",
+                         font=ctk.CTkFont(size=12), text_color="gray60").grid(row=0, column=1)
+
+            # Tagline
+            ctk.CTkLabel(header, text="YouTube • Video • Playlist • Channel",
+                         font=ctk.CTkFont(size=14), text_color="gray60")\
+                .grid(row=0, column=1, sticky="w", padx=20)
+
+            # Controls
+            right = ctk.CTkFrame(header, fg_color="transparent")
+            right.grid(row=0, column=2, sticky="e", padx=20)
+            self.theme_var = ctk.StringVar(value=ctk.get_appearance_mode())
+            ctk.CTkOptionMenu(right, values=["System", "Light", "Dark"],
+                              variable=self.theme_var, width=120, command=self._set_theme)\
+                .grid(row=0, column=0, padx=(0, 10))
+
+            ctk.CTkButton(right, text="Check updates", width=140, fg_color=self.ACCENT,
+                          command=self._manual_check_update)\
+                .grid(row=0, column=1, padx=(0, 10))
+            ctk.CTkButton(right, text="Open folder", width=140,
+                          command=self._open_folder)\
+                .grid(row=0, column=2)
+
+        # ------------------------------------------------------------------
+        # BODY (Tabs + Right Panel)
+        # ------------------------------------------------------------------
+        def _build_body(self):
+            body = ctk.CTkFrame(self.container, corner_radius=16)
+            body.grid(row=1, column=0, sticky="nsew", padx=15, pady=15)
             body.grid_rowconfigure(0, weight=1)
             body.grid_columnconfigure(0, weight=1)
             body.grid_columnconfigure(1, weight=0)
 
-            # Main tab area (left)
-            self.tabview = ctk.CTkTabview(body, width=760, height=560)
-            self.tabview.grid(row=0, column=0, sticky="nsew", padx=(0,12), pady=0)
-            self.tabview.add('Download')
-            self.tabview.add('Settings')
-            self.tabview.add('Logs')
-            self.tabview.add('About')
+            # Tabview
+            self.tabview = ctk.CTkTabview(body, corner_radius=16)
+            self.tabview.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
+            self.tabview.add("Download")
+            self.tabview.add("Settings")
+            self.tabview.add("Logs")
+            self.tabview.add("About")
 
-            # Right panel for quick actions / info
+            # Right Panel
             self._build_right_panel(body)
 
-            # Build each tab content
+            # Build tabs
             self._build_download_tab()
             self._build_settings_tab()
             self._build_logs_tab()
             self._build_about_tab()
 
-            # footer / status (in container)
-            self.footer = ctk.CTkFrame(self.container, corner_radius=8)
-            self.footer.grid(row=2, column=0, sticky="ew", padx=10, pady=(0,8))
-            self.footer.grid_columnconfigure(0, weight=1)
-            self.status_label = ctk.CTkLabel(self.footer, text='Status: Idle', anchor='w')
-            self.status_label.grid(row=0, column=0, sticky="w", padx=10, pady=8)
-
-            # start update-check thread (non-blocking)
-            threading.Thread(target=self._maybe_check_update_gui, daemon=True).start()
-
-        def _build_header(self):
-            header = ctk.CTkFrame(self.container, corner_radius=12, height=70)
-            header.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 0))
-            header.grid_columnconfigure(1, weight=1)
-        
-            # ---- left: logo + title ------------------------------------------------
-            logo_frame = ctk.CTkFrame(header, fg_color="transparent")
-            logo_frame.grid(row=0, column=0, sticky="w", padx=(12, 0))
-
-            # (Optional) you can put a small PNG/SVG here – fallback to text
-            app_name = ctk.CTkLabel(
-                logo_frame,
-                text="YTdownloader",
-                font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold")
-            )
-            app_name.grid(row=0, column=0, padx=(0, 8))
-
-            ver = ctk.CTkLabel(
-                logo_frame,
-                text=f"v{APP_VERSION}",
-                font=ctk.CTkFont(size=10),
-                text_color=("gray70", "gray40")
-            )
-            ver.grid(row=0, column=1)
-
-            # ---- centre: subtitle --------------------------------------------------
-            subtitle = ctk.CTkLabel(
-                header,
-                text="YouTube • Video • Playlist • Channel",
-                font=ctk.CTkFont(size=12),
-                text_color=("gray60", "gray50")
-            )
-            subtitle.grid(row=0, column=1, sticky="w", padx=20)
-
-            # ---- right: theme switch + quick buttons --------------------------------
-            right = ctk.CTkFrame(header, fg_color="transparent")
-            right.grid(row=0, column=2, sticky="e", padx=12)
-
-            # Theme selector (System / Light / Dark)
-            self.theme_var = ctk.StringVar(value=ctk.get_appearance_mode())
-            theme_menu = ctk.CTkOptionMenu(
-                right,
-                values=["System", "Light", "Dark"],
-                variable=self.theme_var,
-                width=110,
-                command=self._set_theme
-            )
-            theme_menu.grid(row=0, column=0, padx=(0, 8))
-
-            ctk.CTkButton(
-                right,
-                text="Check updates",
-                width=120,
-                height=32,
-                fg_color=self.ACCENT,
-                command=self._manual_check_update
-            ).grid(row=0, column=1, padx=(0, 6))
-
-            ctk.CTkButton(
-                right,
-                text="Open folder",
-                width=120,
-                height=32,
-                command=self._open_folder
-            ).grid(row=0, column=2)
-
+        # ------------------------------------------------------------------
+        # RIGHT PANEL
+        # ------------------------------------------------------------------
         def _build_right_panel(self, parent):
-            panel = ctk.CTkFrame(parent, corner_radius=12, width=260)
-            panel.grid(row=0, column=1, sticky="ns", padx=(0, 12), pady=0)
+            panel = ctk.CTkFrame(parent, corner_radius=16, width=320)
+            panel.grid(row=0, column=1, sticky="ns", padx=(0, 15))
             panel.grid_propagate(False)
 
-            # Title
-            ctk.CTkLabel(
-                panel,
-                text="Quick Actions",
-                font=ctk.CTkFont(size=15, weight="bold")
-           ).grid(row=0, column=0, padx=16, pady=(16, 8), sticky="w")
+            ctk.CTkLabel(panel, text="Quick Actions", font=ctk.CTkFont(size=18, weight="bold"))\
+                .grid(row=0, column=0, padx=20, pady=(20, 10), sticky="w")
 
-            # Output folder card
-            folder_card = ctk.CTkFrame(panel, corner_radius=8)
-            folder_card.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 12))
-            folder_card.grid_columnconfigure(0, weight=1)
-        
-            ctk.CTkLabel(folder_card, text="Output folder:", anchor="w").grid(row=0, column=0, sticky="w", padx=12, pady=(8, 2))
-            self.output_label = ctk.CTkLabel(
-                folder_card,
-                text=self.output_dir,
-                wraplength=210,
-                anchor="w",
-                font=ctk.CTkFont(size=10)
-            )
-            self.output_label.grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
-        
-            btns = ctk.CTkFrame(folder_card, fg_color="transparent")
-            btns.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+            # Output folder
+            card = ctk.CTkFrame(panel, corner_radius=12)
+            card.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 15))
+            card.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(card, text="Output folder:", anchor="w")\
+                .grid(row=0, column=0, sticky="w", padx=15, pady=(12, 5))
+            self.output_label = ctk.CTkLabel(card, text=self.output_dir, wraplength=270,
+                                             anchor="w", font=ctk.CTkFont(size=11))
+            self.output_label.grid(row=1, column=0, sticky="w", padx=15, pady=(0, 12))
+
+            btns = ctk.CTkFrame(card, fg_color="transparent")
+            btns.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 12))
             btns.grid_columnconfigure((0, 1), weight=1)
-        
-            ctk.CTkButton(btns, text="Change", width=80, command=self._choose_output).grid(row=0, column=0, padx=(0, 4))
-            ctk.CTkButton(btns, text="Open", width=80, command=self._open_folder).grid(row=0, column=1, padx=(4, 0))
-        
-            # Tips carousel (simple rotating label)
-            tips_frame = ctk.CTkFrame(panel, corner_radius=8)
-            tips_frame.grid(row=2, column=0, sticky="nsew", padx=16, pady=(0, 16))
-            tips_frame.grid_rowconfigure(0, weight=1)
-            tips_frame.grid_columnconfigure(0, weight=1)
-        
-            self.tips_label = ctk.CTkLabel(
-                tips_frame,
-                text="Paste a YouTube URL → Choose format → Download",
-                justify="left",
-                wraplength=210,
-                font=ctk.CTkFont(size=10)
-            )
-            self.tips_label.grid(row=0, column=0, sticky="w", padx=12, pady=12)
-        
-            # rotate tips every 4 s
-            self._tip_index = 0
+            ctk.CTkButton(btns, text="Change", width=100, command=self._choose_output)\
+                .grid(row=0, column=0, padx=(0, 5))
+            ctk.CTkButton(btns, text="Open", width=100, command=self._open_folder)\
+                .grid(row=0, column=1, padx=(5, 0))
+
+            # Tips
+            tips = ctk.CTkFrame(panel, corner_radius=12)
+            tips.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
+            tips.grid_rowconfigure(0, weight=1)
+            self.tips_label = ctk.CTkLabel(tips, text="", justify="left", wraplength=270,
+                                           font=ctk.CTkFont(size=11))
+            self.tips_label.grid(row=0, column=0, sticky="w", padx=15, pady=15)
+
             self._tips = [
                 "Paste a YouTube URL → Choose format → Download",
                 "Use MP3 320 kbps for best audio quality",
                 "Enable subtitles & thumbnails for full media",
                 "Check the Logs tab for detailed progress"
             ]
-            self.after(4000, self._rotate_tip)
+            self._tip_index = 0
+            self.after(3000, self._rotate_tip)
 
         def _rotate_tip(self):
             self._tip_index = (self._tip_index + 1) % len(self._tips)
             self.tips_label.configure(text=self._tips[self._tip_index])
-            self.after(4000, self._rotate_tip)
+            self.after(3000, self._rotate_tip)
 
+        # ------------------------------------------------------------------
+        # DOWNLOAD TAB
+        # ------------------------------------------------------------------
         def _build_download_tab(self):
-            tab = self.tabview.tab('Download')
+            tab = self.tabview.tab("Download")
             tab.grid_rowconfigure(0, weight=1)
             tab.grid_columnconfigure((0, 1), weight=1)
 
-            # ---------- LEFT COLUMN (form) ----------
-            left = ctk.CTkFrame(tab, corner_radius=12)
-            left.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=16)
+            # Form
+            left = ctk.CTkFrame(tab, corner_radius=16)
+            left.grid(row=0, column=0, sticky="nsew", padx=(20, 10), pady=20)
             left.grid_columnconfigure(1, weight=1)
 
-            row = 0
-            # URL
-            ctk.CTkLabel(left, text="URL:", anchor="w").grid(row=row, column=0, sticky="w", padx=(12, 6), pady=(8, 2))
-            url_frame = ctk.CTkFrame(left, fg_color="transparent")
-            url_frame.grid(row=row, column=1, sticky="ew", padx=(0, 12), pady=(8, 2))
-            url_frame.grid_columnconfigure(0, weight=1)
-            self.url_entry = ctk.CTkEntry(url_frame, placeholder_text="https://youtube.com/…")
+            r = 0
+            ctk.CTkLabel(left, text="URL:", anchor="w").grid(row=r, column=0, sticky="w", padx=(15, 10), pady=(15, 5))
+            url_f = ctk.CTkFrame(left, fg_color="transparent")
+            url_f.grid(row=r, column=1, sticky="ew", padx=(0, 15), pady=(15, 5))
+            url_f.grid_columnconfigure(0, weight=1)
+            self.url_entry = ctk.CTkEntry(url_f, placeholder_text="https://youtube.com/…")
             self.url_entry.grid(row=0, column=0, sticky="ew")
-            ctk.CTkButton(url_frame, text="Paste", width=70, command=self._paste).grid(row=0, column=1, padx=(4, 0))
-            row += 1
-        
-            # Mode
-            ctk.CTkLabel(left, text="Mode:", anchor="w").grid(row=row, column=0, sticky="w", padx=(12, 6), pady=(12, 2))
+            ctk.CTkButton(url_f, text="Paste", width=70, command=self._paste)\
+                .grid(row=0, column=1, padx=(5, 0))
+            r += 1
+
+            ctk.CTkLabel(left, text="Mode:", anchor="w").grid(row=r, column=0, sticky="w", padx=(15, 10), pady=(10, 5))
             mode_f = ctk.CTkFrame(left, fg_color="transparent")
-            mode_f.grid(row=row, column=1, sticky="w", pady=(12, 2))
+            mode_f.grid(row=r, column=1, sticky="w", pady=(10, 5))
             self.mode_var = ctk.StringVar(value="video")
             for txt, val in [("Video", "video"), ("Playlist", "playlist"), ("Channel", "channel")]:
-                ctk.CTkRadioButton(mode_f, text=txt, variable=self.mode_var, value=val).pack(side="left", padx=4)
-            row += 1
+                ctk.CTkRadioButton(mode_f, text=txt, variable=self.mode_var, value=val)\
+                    .pack(side="left", padx=6)
+            r += 1
 
-            # Format + MP3 bitrate
-            fmt_frame = ctk.CTkFrame(left, fg_color="transparent")
-            fmt_frame.grid(row=row, column=1, sticky="w", pady=(12, 2))
-            ctk.CTkLabel(left, text="Format:", anchor="w").grid(row=row, column=0, sticky="w", padx=(12, 6), pady=(12, 2))
-
+            ctk.CTkLabel(left, text="Format:", anchor="w").grid(row=r, column=0, sticky="w", padx=(15, 10), pady=(10, 5))
+            fmt_f = ctk.CTkFrame(left, fg_color="transparent")
+            fmt_f.grid(row=r, column=1, sticky="w", pady=(10, 5))
             self.format_var = ctk.StringVar(value="mp4")
-            fmt_menu = ctk.CTkOptionMenu(fmt_frame, values=["mp4", "mp3"], variable=self.format_var,
-                                        width=100, command=self._on_format_change)
-            fmt_menu.pack(side="left", padx=(0, 8))
-
+            ctk.CTkOptionMenu(fmt_f, values=["mp4", "mp3"], variable=self.format_var,
+                              width=110, command=self._on_format_change).pack(side="left", padx=(0, 10))
             self.mp3_bitrate_var = ctk.StringVar(value="192")
-            self.mp3_bitrate_menu = ctk.CTkOptionMenu(fmt_frame, values=["128", "192", "320"],
-                                            variable=self.mp3_bitrate_var, width=80, state="disabled")
+            self.mp3_bitrate_menu = ctk.CTkOptionMenu(fmt_f, values=["128", "192", "320"],
+                                                      variable=self.mp3_bitrate_var, width=90, state="disabled")
             self.mp3_bitrate_menu.pack(side="left")
-            row += 1
+            r += 1
 
-            # Quality
-            ctk.CTkLabel(left, text="Quality:", anchor="w").grid(row=row, column=0, sticky="w", padx=(12, 6), pady=(12, 2))
+            ctk.CTkLabel(left, text="Quality:", anchor="w").grid(row=r, column=0, sticky="w", padx=(15, 10), pady=(10, 5))
             qual_f = ctk.CTkFrame(left, fg_color="transparent")
-            qual_f.grid(row=row, column=1, sticky="w", pady=(12, 2))
+            qual_f.grid(row=r, column=1, sticky="w", pady=(10, 5))
             self.quality_var = ctk.StringVar(value="auto")
             self.quality_menu = ctk.CTkOptionMenu(qual_f, values=["auto", "1080", "720", "480", "360"],
-                                         variable=self.quality_var, width=100)
+                                                  variable=self.quality_var, width=110)
             self.quality_menu.pack(side="left")
-            row += 1
-        
-            # Checkboxes
+            r += 1
+
+            ctk.CTkLabel(left, text="Options:", anchor="w").grid(row=r, column=0, sticky="w", padx=(15, 10), pady=(10, 5))
             chk_f = ctk.CTkFrame(left, fg_color="transparent")
-            chk_f.grid(row=row, column=1, sticky="w", pady=(12, 2))
+            chk_f.grid(row=r, column=1, sticky="w", pady=(10, 5))
             self.subs_var = ctk.BooleanVar(); self.thumb_var = ctk.BooleanVar(); self.meta_var = ctk.BooleanVar()
-            ctk.CTkCheckBox(chk_f, text="Subtitles", variable=self.subs_var).pack(side="left", padx=6)
-            ctk.CTkCheckBox(chk_f, text="Thumbnail", variable=self.thumb_var).pack(side="left", padx=6)
-            ctk.CTkCheckBox(chk_f, text="Metadata", variable=self.meta_var).pack(side="left", padx=6)
-            row += 1
-        
-            # Buttons
+            for txt, var in [("Subtitles", self.subs_var), ("Thumbnail", self.thumb_var), ("Metadata", self.meta_var)]:
+                ctk.CTkCheckBox(chk_f, text=txt, variable=var).pack(side="left", padx=8)
+            r += 1
+
             btn_f = ctk.CTkFrame(left, fg_color="transparent")
-            btn_f.grid(row=row, column=0, columnspan=2, sticky="e", pady=(20, 8))
-            ctk.CTkButton(btn_f, text="Fetch Info", width=120, command=self._fetch_info).pack(side="left", padx=(12, 6))
-            self.download_btn = ctk.CTkButton(btn_f, text="Download", width=140,
+            btn_f.grid(row=r, column=0, columnspan=2, sticky="e", pady=(20, 15))
+            ctk.CTkButton(btn_f, text="Fetch Info", width=140, command=self._fetch_info)\
+                .pack(side="left", padx=(15, 5))
+            self.download_btn = ctk.CTkButton(btn_f, text="Download", width=160,
                                               fg_color=self.ACCENT, command=self._start_download_thread)
-            self.download_btn.pack(side="left", padx=6)
-            ctk.CTkButton(btn_f, text="Open Folder", width=120, command=self._open_folder).pack(side="left", padx=(6, 12))
-            row += 1
-        
-            # ---------- RIGHT COLUMN (progress + status) ----------
-            right = ctk.CTkFrame(tab, corner_radius=12)
-            right.grid(row=0, column=1, sticky="nsew", padx=(8, 16), pady=16)
-            right.grid_rowconfigure(0, weight=1)
-            right.grid_columnconfigure(0, weight=1)
-        
-            # Progress ring (circular)
-            self.progress = ctk.CTkProgressBar(right, orientation="horizontal", height=12)
-            self.progress.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 8))
+            self.download_btn.pack(side="left", padx=5)
+            ctk.CTkButton(btn_f, text="Open Folder", width=140, command=self._open_folder)\
+                .pack(side="left", padx=(5, 15))
+
+            # Progress Panel
+            right = ctk.CTkFrame(tab, corner_radius=16)
+            right.grid(row=0, column=1, sticky="nsew", padx=(10, 20), pady=20)
+            right.grid_rowconfigure(2, weight=1)
+
+            self.progress = ctk.CTkProgressBar(right, height=16, progress_color=self.ACCENT)
+            self.progress.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
             self.progress.set(0)
-        
-            # Status badge
-            self.status_badge = ctk.CTkLabel(right, text="Idle", font=ctk.CTkFont(size=13, weight="bold"),
-                                            text_color="gray30", corner_radius=8, fg_color="#f0f0f0")
-            self.status_badge.grid(row=1, column=0, pady=(0, 12))
 
-            # Small log preview
-            log_prev = ctk.CTkTextbox(right, height=120, font=ctk.CTkFont(family="Consolas", size=10))
-            log_prev.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
-            self.small_log = log_prev   # keep reference for _log
+            self.status_badge = ctk.CTkLabel(right, text="Idle", font=ctk.CTkFont(size=16, weight="bold"),
+                                             corner_radius=12, width=180, height=40)
+            self.status_badge.grid(row=1, column=0, pady=(0, 10))
 
-        def _on_format_change(self, v: str):
-            # Enable bitrate menu only when mp3 is selected
-            try:
-                if v == 'mp3':
-                    self.mp3_bitrate_menu.configure(state='normal')
-                else:
-                    self.mp3_bitrate_menu.configure(state='disabled')
-            except Exception:
-                pass
+            self.small_log = ctk.CTkTextbox(right, height=180, font=ctk.CTkFont(family="Consolas", size=11))
+            self.small_log.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
 
+        # ------------------------------------------------------------------
+        # OTHER TABS
+        # ------------------------------------------------------------------
         def _build_settings_tab(self):
-            tab = self.tabview.tab('Settings')
+            tab = self.tabview.tab("Settings")
             tab.grid_columnconfigure(0, weight=1)
-        
-            # Title
-            ctk.CTkLabel(tab, text="Settings", font=ctk.CTkFont(size=18, weight="bold")
-                         ).grid(row=0, column=0, sticky="w", padx=20, pady=(20, 12))
-
-            # Appearance
-            sec = ctk.CTkFrame(tab, corner_radius=10)
-            sec.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 12))
+            ctk.CTkLabel(tab, text="Settings", font=ctk.CTkFont(size=22, weight="bold"))\
+                .grid(row=0, column=0, sticky="w", padx=25, pady=(25, 15))
+            sec = ctk.CTkFrame(tab, corner_radius=16)
+            sec.grid(row=1, column=0, sticky="ew", padx=25, pady=(0, 25))
             sec.grid_columnconfigure(1, weight=1)
-            ctk.CTkLabel(sec, text="Appearance:", anchor="w").grid(row=0, column=0, sticky="w", padx=12, pady=8)
-            theme_menu = ctk.CTkOptionMenu(sec, values=["System", "Light", "Dark"],
-                                           command=self._set_theme, width=120)
-            theme_menu.grid(row=0, column=1, sticky="e", padx=12, pady=8)
+            ctk.CTkLabel(sec, text="Appearance:", anchor="w")\
+                .grid(row=0, column=0, sticky="w", padx=20, pady=20)
+            ctk.CTkOptionMenu(sec, values=["System", "Light", "Dark"], command=self._set_theme, width=140)\
+                .grid(row=0, column=1, sticky="e", padx=20, pady=20)
+            ok = has_ffmpeg()
+            txt = "ffmpeg detected" if ok else "ffmpeg missing"
+            fg = "#e8f5e9" if ok else "#ffebee"
+            tc = "#2e7d32" if ok else "#c62828"
+            ctk.CTkLabel(sec, text=txt, fg_color=fg, text_color=tc, corner_radius=8,
+                         font=ctk.CTkFont(weight="bold"))\
+                .grid(row=1, column=0, columnspan=2, sticky="w", padx=20, pady=(0, 20))
 
-            # ffmpeg status badge
-            ffmpeg_ok = has_ffmpeg()
-            badge_txt = "ffmpeg detected" if ffmpeg_ok else "ffmpeg missing"
-            badge_fg = "#e0f7fa" if ffmpeg_ok else "#ffebee"
-            badge_tc = "#006064" if ffmpeg_ok else "#b71c1c"
-            ctk.CTkLabel(sec, text=badge_txt, fg_color=badge_fg, text_color=badge_tc,
-                         corner_radius=6, font=ctk.CTkFont(weight="bold")).grid(row=1, column=0,
-                         columnspan=2, sticky="w", padx=12, pady=(0, 8))
-                         
         def _build_logs_tab(self):
-            tab = self.tabview.tab('Logs')
+            tab = self.tabview.tab("Logs")
+            tab.grid_rowconfigure(1, weight=1)
+            tab.grid_columnconfigure(0, weight=1)
+            top = ctk.CTkFrame(tab, fg_color="transparent")
+            top.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+            top.grid_columnconfigure(0, weight=1)
+            self.search_var = ctk.StringVar()
+            ctk.CTkEntry(top, placeholder_text="Search logs…", textvariable=self.search_var)\
+                .grid(row=0, column=0, sticky="ew", padx=(0, 10))
+            self.search_var.trace("w", lambda *args: self._filter_logs())
+            ctk.CTkButton(top, text="Clear", width=100, command=self._clear_logs)\
+                .grid(row=0, column=1, padx=(0, 10))
+            ctk.CTkButton(top, text="Copy All", width=110, command=self._copy_logs)\
+                .grid(row=0, column=2)
+            self.logbox = ctk.CTkTextbox(tab, font=ctk.CTkFont(family="Consolas", size=11))
+            self.logbox.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
+            self._refresh_logs()
+
+        def _build_about_tab(self):
+            tab = self.tabview.tab('About')
             tab.grid_rowconfigure(0, weight=1)
             tab.grid_columnconfigure(0, weight=1)
 
-            # Search bar
-            search_f = ctk.CTkFrame(tab, fg_color="transparent")
-            search_f.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 4))
-            search_f.grid_columnconfigure(0, weight=1)
-            self.search_var = ctk.StringVar()
-            search_entry = ctk.CTkEntry(search_f, placeholder_text="Search logs…", textvariable=self.search_var)
-            search_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-            search_entry.bind("<KeyRelease>", self._filter_logs)
-        
-            ctk.CTkButton(search_f, text="Clear", width=80, command=self._clear_logs).grid(row=0, column=1, padx=(0, 6))
-            ctk.CTkButton(search_f, text="Copy All", width=90, command=self._copy_logs).grid(row=0, column=2)
-        
-            # Log textbox
-            self.logbox = ctk.CTkTextbox(tab, font=ctk.CTkFont(family="Consolas", size=10))
-            self.logbox.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
-        
-            # initial fill
-            self._refresh_logs()
+            # Main card for content
+            card = ctk.CTkFrame(tab, corner_radius=16)
+            card.grid(row=0, column=0, sticky="nsew", padx=32, pady=32)
+            card.grid_rowconfigure(0, weight=1)
+            card.grid_columnconfigure(0, weight=1)
 
-        def _filter_logs(self, _=None):
+            # Header section
+            header = ctk.CTkFrame(card, fg_color="transparent")
+            header.grid(row=0, column=0, sticky="ew", pady=(0, 16))
+            header.grid_columnconfigure(0, weight=1)
+
+            ctk.CTkLabel(header, text="YTdownloader", font=ctk.CTkFont(size=26, weight="bold"))\
+                .grid(row=0, column=0, sticky="w")
+            ctk.CTkLabel(header, text=f"v{APP_VERSION}", font=ctk.CTkFont(size=13, weight="bold"),
+                         text_color="#777")\
+                .grid(row=0, column=1, sticky="e", padx=(24, 0))
+
+            # Description text
+            desc = ctk.CTkLabel(card, text=(
+                "A modern YouTube downloader built with yt-dlp.\n\n"
+                "Key Features:\n"
+                "- Download videos, playlists, or channels\n"
+                "- Convert to MP3 with custom bitrate\n"
+                "- Save subtitles, thumbnails, and metadata\n"
+                "- Auto-update checker for latest versions\n"
+                "- Light/Dark mode support\n\n"
+            ), justify="left", wraplength=720, font=ctk.CTkFont(size=14))
+            desc.grid(row=1, column=0, sticky="w")
+
+            # GitHub link button
+            link_btn = ctk.CTkButton(card, text="GitHub Repository →", fg_color=self.ACCENT,
+                                     hover_color=self.ACCENT_HOVER, font=ctk.CTkFont(size=14),
+                                     command=lambda: webbrowser.open("https://github.com/mohit52838/YTdownloader"))
+            link_btn.grid(row=2, column=0, sticky="w", pady=(24, 0))
+
+            # Footer note
+            footer = ctk.CTkLabel(card, text="© 2025 Mohit Patil. All rights reserved.",
+                                  font=ctk.CTkFont(size=11), text_color="#888")
+            footer.grid(row=3, column=0, sticky="sw", pady=(32, 0))
+            
+        # ------------------------------------------------------------------
+        # FOOTER
+        # ------------------------------------------------------------------
+        def _build_footer(self):
+            footer = ctk.CTkFrame(self.container, corner_radius=12, height=50)
+            footer.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 15))
+            footer.grid_columnconfigure(0, weight=1)
+            self.status_label = ctk.CTkLabel(footer, text="Status: Idle", anchor="w",
+                                             font=ctk.CTkFont(size=13))
+            self.status_label.grid(row=0, column=0, sticky="w", padx=20, pady=12)
+
+        # ------------------------------------------------------------------
+        # ANIMATIONS (No opacity!)
+        # ------------------------------------------------------------------
+        def _animate_startup(self):
+            self.container.grid_remove()
+            self.after(100, self._slide_in)
+
+        def _slide_in(self):
+            self.container.grid()
+            x = -1200
+            self.container.place(x=x, y=0, relwidth=1, relheight=1)
+            self._animate_slide(x, 0)
+
+        def _animate_slide(self, current, target):
+            if abs(current - target) > 5:
+                current += (target - current) * 0.15
+                self.container.place(x=current, y=0, relwidth=1, relheight=1)
+                self.after(16, lambda: self._animate_slide(current, target))
+            else:
+                self.container.place_forget()
+                self.container.grid()
+
+        # ------------------------------------------------------------------
+        # STATUS & PROGRESS
+        # ------------------------------------------------------------------
+        def _set_status_badge(self, text: str, success: bool = None):
+            self.status_badge.configure(text=text)
+            if success is True:
+                self.status_badge.configure(fg_color="#d4edda", text_color="#155724")
+            elif success is False:
+                self.status_badge.configure(fg_color="#f8d7da", text_color="#721c24")
+            else:
+                self.status_badge.configure(fg_color=ctk.ThemeManager.theme["CTkFrame"]["fg_color"][1],
+                                           text_color=ctk.ThemeManager.theme["CTkLabel"]["text_color"][1])
+
+        def _update_progress(self, pct: int):
+            """
+            yt-dlp reports:
+                - video download progress
+                - audio download progress
+                - then a merge step (often resets to low % or 0)
+
+            This normalizes the progress into a smooth 0–100%.
+            """
+
+            # Initialize stored progress
+            if not hasattr(self, "_stable_pct"):
+                self._stable_pct = 0
+                self._max_seen_pct = 0
+
+            # yt-dlp sometimes gives nonsense values like negative, None, or >100
+            if not isinstance(pct, (int, float)) or pct < 0 or pct > 1000:
+                return
+
+            # yt-dlp merge step resets to a low value → ignore if we were ahead
+            if pct < self._max_seen_pct:
+                # ignore backward jumps (video/audio switching, merging)
+                pct = self._max_seen_pct
+
+            # Update trackers
+            self._max_seen_pct = max(self._max_seen_pct, pct)
+            self._stable_pct = pct
+
+            # Clamp strictly between 0–100
+            pct = max(0, min(100, pct))
+
+            # Update UI progress bar
+            self.progress.set(pct / 100)
+        
+            # Update bottom-left status message
+            self.status_label.configure(text=f"Status: Downloading... {pct}%")
+
+            # Show recent logs
+            recent = "\n".join(logger._lines[-5:]) if logger._lines else ""
+            self.small_log.delete("1.0", "end")
+            self.small_log.insert("1.0", recent)
+
+            # When reaching real 100%
+            if pct == 100:
+                self._max_seen_pct = 0
+                self._stable_pct = 0
+        
+        def _set_status(self, s: str):
+            self.status_label.configure(text=f"Status: {s}")
+            if "idle" in s.lower():
+                self._set_status_badge("Idle")
+            elif "downloading" in s.lower():
+                self._set_status_badge("Downloading…")
+            elif "finished" in s.lower():
+                self._set_status_badge("Finished", True)
+            elif "failed" in s.lower() or "error" in s.lower():
+                self._set_status_badge("Failed", False)
+            elif "fetching" in s.lower():
+                self._set_status_badge("Fetching…")
+
+        # ------------------------------------------------------------------
+        # UTILITY
+        # ------------------------------------------------------------------
+        def _on_format_change(self, v: str):
+            self.mp3_bitrate_menu.configure(state="normal" if v == "mp3" else "disabled")
+
+        def _paste(self):
+            try: self.url_entry.delete(0, "end"); self.url_entry.insert(0, self.clipboard_get())
+            except: pass
+
+        def _choose_output(self):
+            folder = filedialog.askdirectory(initialdir=self.output_dir)
+            if folder:
+                self.output_dir = folder
+                self.output_label.configure(text=folder)
+
+        def _open_folder(self):
+            try: os.startfile(self.output_dir)
+            except:
+                try: subprocess.Popen(['xdg-open' if sys.platform != 'darwin' else 'open', self.output_dir])
+                except Exception as e: messagebox.showinfo("Error", f"Cannot open: {e}")
+
+        def _set_theme(self, mode):
+            ctk.set_appearance_mode(mode)
+
+        def _refresh_logs(self):
+            self.logbox.delete("1.0", "end")
+            self.logbox.insert("1.0", logger.text())
+
+        def _filter_logs(self):
             term = self.search_var.get().lower()
             self.logbox.delete("1.0", "end")
             for line in logger._lines:
                 if term in line.lower():
                     self.logbox.insert("end", line + "\n")
-            self.logbox.see("end")
+
+        def _clear_logs(self):
+            logger._lines.clear()
+            self._refresh_logs()
 
         def _copy_logs(self):
             self.clipboard_clear()
             self.clipboard_append(logger.text())
 
-        def _build_about_tab(self):
-            tab = self.tabview.tab('About')
-            txt = (
-               "**YTdownloader – Modern UI**\n\n"
-                "- **Engine:** `yt-dlp`\n"
-                "- **Features:** Video / Playlist / Channel, MP3 conversion, thumbnails, metadata, auto-updates\n"
-                "- **Version:** `" + APP_VERSION + "`\n\n"
-                "[GitHub Repository](https://github.com/mohit52838/YTdownloader)"
-            )
-            lbl = ctk.CTkLabel(tab, text=txt, justify="left", wraplength=680,
-                               font=ctk.CTkFont(size=12))
-            lbl.grid(row=0, column=0, padx=24, pady=24, sticky="w")
-            # make the link clickable
-            lbl.bind("<Button-1>", lambda e: webbrowser.open("https://github.com/mohit52838/YTdownloader"))
-
-        def _set_status_badge(self, text: str, success: bool = None):
-            """success: True=green, False=red, None=neutral"""
-            self.status_badge.configure(text=text)
-            if success is True:
-                self.status_badge.configure(fg_color="#e8f5e9", text_color="#2e7d32")
-            elif success is False:
-                self.status_badge.configure(fg_color="#ffebee", text_color="#c62828")
-            else:
-                self.status_badge.configure(fg_color="#f5f5f5", text_color="#424242")
-
-        # ---------- utility methods (unchanged behavior) ----------
-        def _paste(self):
-            try:
-                txt = self.clipboard_get()
-                self.url_entry.delete(0, 'end')
-                self.url_entry.insert(0, txt)
-            except Exception:
-                pass
-
-        def _choose_output(self):
-            try:
-                folder = filedialog.askdirectory(initialdir=self.output_dir)
-                if folder:
-                    self.output_dir = folder
-                    self.output_label.configure(text=self.output_dir)
-            except Exception:
-                pass
-
-        def _open_folder(self):
-            try:
-                os.startfile(self.output_dir)
-            except Exception:
-                try:
-                    import subprocess, sys
-                    if sys.platform == 'darwin':
-                        subprocess.Popen(['open', self.output_dir])
-                    else:
-                        subprocess.Popen(['xdg-open', self.output_dir])
-                except Exception as e:
-                    messagebox.showinfo('Error', f'Cannot open folder: {e}')
-
-        def _set_theme(self, v):
-            if v == 'Light':
-                ctk.set_appearance_mode('Light')
-            elif v == 'Dark':
-                ctk.set_appearance_mode('Dark')
-            else:
-                ctk.set_appearance_mode('System')
-
-        def _refresh_logs(self):
-            try:
-                self.logbox.delete('1.0', 'end')
-                self.logbox.insert('1.0', logger.text())
-            except Exception:
-                pass
-
-        def _clear_logs(self):
-            logger._lines = []
-            self._refresh_logs()
-
         def _fetch_info(self):
             url = self.url_entry.get().strip()
-            if not url:
-                messagebox.showwarning('Input', 'Please paste a URL first')
-                return
-            mode = self.mode_var.get()
-            threading.Thread(target=self._fetch_info_worker, args=(url, mode), daemon=True).start()
+            if not url: return messagebox.showwarning("Input", "Please enter a URL")
+            threading.Thread(target=self._fetch_info_worker, args=(url, self.mode_var.get()), daemon=True).start()
 
         def _fetch_info_worker(self, url, mode):
-            # keep existing behavior
-            self._set_status('Fetching info...')
+            self._set_status("Fetching info...")
             try:
-                opts = {'quiet': True, 'no_warnings': True, 'skip_download': True}
-                with YoutubeDL(opts) as ydl:
+                with YoutubeDL({'quiet': True, 'skip_download': True}) as ydl:
                     info = ydl.extract_info(url, download=False)
-                title = info.get('title')
-                formats = info.get('formats', [])
-                heights = sorted({str(f.get('height')) for f in formats if f.get('height')}, reverse=True)
-                qvals = ['auto'] + [h for h in heights if h and h.isdigit()]
-                qvals = qvals[:6]
+                heights = sorted({f.get('height') for f in info.get('formats', []) if f.get('height')}, reverse=True)
+                qvals = ['auto'] + [str(h) for h in heights[:5] if h]
                 self.quality_menu.configure(values=qvals)
                 self.quality_var.set('auto')
-                self._log(f'Fetched info: {title}')
-                self._set_status('Info fetched')
+                self._log(f"Fetched: {info.get('title')}")
+                self._set_status("Info fetched")
             except Exception as e:
-                self._log(f'Fetch error: {e}')
-                self._set_status('Fetch failed')
+                self._log(f"Error: {e}")
+                self._set_status("Fetch failed")
 
         def _start_download_thread(self):
-            # Prevent multiple concurrent downloads
-            if getattr(self, 'downloading', False):
-                messagebox.showinfo('Download', 'A download is already in progress. Please wait for it to finish.')
-                return
+            if getattr(self, 'downloading', False): return
             threading.Thread(target=self._download_action, daemon=True).start()
 
         def _download_action(self):
             url = self.url_entry.get().strip()
-            if not url:
-                messagebox.showwarning('Input', 'Please paste a URL first')
-                return
-            fmt = self.format_var.get()
-            quality = self.quality_var.get()
-            subs = self.subs_var.get()
-            thumb = self.thumb_var.get()
-            meta = self.meta_var.get()
-            mode = self.mode_var.get()
-            mp3_bitrate = None
-            if fmt.lower() == 'mp3':
-                mp3_bitrate = self.mp3_bitrate_var.get()
-
-            # set flag and disable button
+            if not url: return messagebox.showwarning("Input", "Please enter a URL")
             self.downloading = True
-            try:
-                try:
-                    self.download_btn.configure(state='disabled')
-                except Exception:
-                    pass
-
-                d = YTDLDownloader(self.output_dir, ui_log=self._log, ui_progress=self._update_progress)
-                self._set_status('Downloading...')
-                ok = d.download(url, mode=mode, fmt=fmt, quality_label=quality, save_subs=subs, save_thumb=thumb, save_meta=meta, mp3_bitrate=mp3_bitrate)
-                if ok:
-                    self._set_status('Finished')
-                    messagebox.showinfo('Done', 'Downloads finished — check output folder')
-                else:
-                    self._set_status('Failed')
-                    messagebox.showerror('Error', 'Download failed — check logs for details')
-            except Exception as e:
-                self._log(f'Download flow error: {e}')
-                self._set_status('Error')
-            finally:
-                # re-enable
-                try:
-                    self.download_btn.configure(state='normal')
-                except Exception:
-                    pass
-                self.downloading = False
-
-        def _update_progress(self, pct: int):
-            try:
-                self.progress.set(pct/100)
-                self.status_label.configure(text=f'Status: Downloading... {pct}%')
-                self._refresh_logs()
-            except Exception:
-                pass
-
-        def _set_status(self, s: str):
-            try:
-                # Update footer
-                self.status_label.configure(text=f"Status: {s}")
-
-                # Update badge in Download tab
-                if "idle" in s.lower():
-                    self._set_status_badge("Idle")
-                elif "downloading" in s.lower():
-                    self._set_status_badge("Downloading…", None)
-                elif "finished" in s.lower():
-                    self._set_status_badge("Finished", True)
-                elif "failed" in s.lower() or "error" in s.lower():
-                    self._set_status_badge("Failed", False)
-                elif "fetching" in s.lower():
-                    self._set_status_badge("Fetching…", None)
-                else:
-                    self._set_status_badge(s)
-            except Exception:
-                pass
+            self.download_btn.configure(state="disabled")
+            d = YTDLDownloader(self.output_dir, ui_log=self._log, ui_progress=self._update_progress)
+            self._set_status("Downloading...")
+            ok = d.download(url,
+                            mode=self.mode_var.get(),
+                            fmt=self.format_var.get(),
+                            quality_label=self.quality_var.get(),
+                            save_subs=self.subs_var.get(),
+                            save_thumb=self.thumb_var.get(),
+                            save_meta=self.meta_var.get(),
+                            mp3_bitrate=self.mp3_bitrate_var.get() if self.format_var.get() == "mp3" else None)
+            self.download_btn.configure(state="normal")
+            self.downloading = False
+            if ok:
+                self._set_status("Finished")
+                messagebox.showinfo("Success", "Download completed!")
+            else:
+                self._set_status("Failed")
+                messagebox.showerror("Error", "Download failed. Check logs.")
 
         def _log(self, s: str):
             logger.add(s)
             try:
-                self.logbox.insert('end', s + '\n')
-                self.logbox.see('end')
-            except Exception:
-                pass
+                self.logbox.insert("end", s + "\n")
+                self.logbox.see("end")
+            except: pass
 
         def _maybe_check_update_gui(self):
             try:
-                download_url, latest = check_for_update()
-                if download_url and latest:
-                    # Prompt user (non-blocking)
-                    ans = messagebox.askyesno('Update available', f'New version {latest} is available. Do you want to download and install now?')
-                    if ans:
-                        if getattr(sys, 'frozen', False) and sys.executable.lower().endswith('.exe'):
-                            install_update(download_url)
+                url, ver = check_for_update()
+                if url and ver:
+                    if messagebox.askyesno("Update", f"v{ver} available. Install now?"):
+                        if sys.executable.lower().endswith('.exe'):
+                            install_update(url)
                         else:
-                            messagebox.showinfo('Update available', f'New version {latest} available. Download it from:\n{download_url}')
-            except Exception:
-                pass
+                            messagebox.showinfo("Update", f"Download:\n{url}")
+            except: pass
 
         def _manual_check_update(self):
             try:
-                download_url, latest = check_for_update()
-                if download_url and latest:
-                    if messagebox.askyesno('Update available', f'New version {latest} is available. Open release page?'):
-                        # open releases page in browser
-                        import webbrowser
+                url, ver = check_for_update()
+                if url and ver:
+                    if messagebox.askyesno("Update", f"v{ver} available. Open GitHub?"):
                         webbrowser.open(f"https://github.com/{GITHUB_REPO}/releases/latest")
                 else:
-                    messagebox.showinfo('Update', 'No updates found')
-            except Exception:
-                messagebox.showinfo('Update', 'Update check failed')
+                    messagebox.showinfo("Update", "You're up to date!")
+            except:
+                messagebox.showinfo("Update", "Check failed.")
 
 if not GUI_AVAILABLE:
     def notify_cli_update():
