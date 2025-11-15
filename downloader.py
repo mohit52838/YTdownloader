@@ -628,7 +628,6 @@ if GUI_AVAILABLE:
                 - video download progress
                 - audio download progress
                 - then a merge step (often resets to low % or 0)
-
             This normalizes the progress into a smooth 0–100%.
             """
 
